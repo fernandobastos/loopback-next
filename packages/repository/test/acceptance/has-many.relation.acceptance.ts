@@ -13,6 +13,7 @@ import {
   hasManyRepositoryFactory,
   HasManyDefinition,
   RelationType,
+  HasManyEntityCrudRepository,
 } from '../..';
 import {expect} from '@loopback/testlab';
 
@@ -24,32 +25,27 @@ describe('HasMany relation', () => {
   let existingCustomerId: number;
   //FIXME: this should be inferred from relational decorators
   let customerHasManyOrdersRelationMeta: HasManyDefinition;
+  let customerOrders: HasManyEntityCrudRepository<Order>;
 
   beforeEach(async () => {
     existingCustomerId = (await givenPersistedCustomerInstance()).id;
     customerHasManyOrdersRelationMeta = givenHasManyRelationMetadata();
+    // Ideally, we would like to write
+    // customerRepo.orders.create(customerId, orderData);
+    // or customerRepo.orders({id: customerId}).*
+    // The initial "involved" implementation is below
+
+    //FIXME: should be automagically instantiated via DI or other means
+    customerOrders = hasManyRepositoryFactory(
+      existingCustomerId,
+      customerHasManyOrdersRelationMeta,
+      orderRepo,
+    );
   });
 
   it('can create an instance of the related model', async () => {
-    // A controller method - CustomerOrdersController.create()
-    // customerRepo and orderRepo would be injected via constructor arguments
-    async function create(customerId: number, orderData: Partial<Order>) {
-      // Ideally, we would like to write
-      // customerRepo.orders.create(customerId, orderData);
-      // or customerRepo.orders({id: customerId}).*
-      // The initial "involved" implementation is below
-
-      //FIXME: should be automagically instantiated via DI or other means
-      const customerOrders = hasManyRepositoryFactory(
-        customerId,
-        customerHasManyOrdersRelationMeta,
-        orderRepo,
-      );
-      return await customerOrders.create(orderData);
-    }
-
     const description = 'an order desc';
-    const order = await create(existingCustomerId, {description});
+    const order = await customerOrders.create({description});
 
     expect(order.toObject()).to.containDeep({
       customerId: existingCustomerId,
@@ -59,6 +55,43 @@ describe('HasMany relation', () => {
     expect(persisted.toObject()).to.deepEqual(order.toObject());
   });
 
+  it('can patch many instances', async () => {
+    await createSamples();
+    await testPatch();
+
+    async function testPatch() {
+      const patchObject = {description: 'new order'};
+      const arePatched = await customerOrders.patch(patchObject);
+      // tslint:disable-next-line: no-unused-expression
+      expect(arePatched).to.equal(2);
+      const patchedItems = await customerOrders.find();
+      expect(patchedItems).to.have.length(2);
+      patchedItems.forEach(order => {
+        expect(order.description).to.eql('new order');
+        expect(order.customerId).to.eql(existingCustomerId);
+      });
+    }
+  });
+
+  it('can delete many instances', async () => {
+    await createSamples();
+    await testDelete();
+
+    async function testDelete() {
+      const deletedOrders = await customerOrders.delete();
+      // tslint:disable-next-line: no-unused-expression
+      expect(deletedOrders).to.equal(2);
+      const relatedOrders = await customerOrders.find();
+      // tslint:disable-next-line: no-unused-expression
+      expect(relatedOrders).to.be.empty;
+    }
+  });
+
+  async function createSamples() {
+    const samples = [{description: 'order 1'}, {description: 'order 2'}];
+    await customerOrders.create(samples[0]);
+    await customerOrders.create(samples[1]);
+  }
   // This should be enforced by the database to avoid race conditions
   it.skip('reject create request when the customer does not exist');
 
@@ -91,6 +124,12 @@ describe('HasMany relation', () => {
       required: true,
     })
     description: string;
+
+    @property({
+      type: 'boolean',
+      required: false,
+    })
+    isDelivered: boolean;
 
     @property({
       type: 'number',
